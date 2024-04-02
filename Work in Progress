@@ -1,0 +1,242 @@
+/*
+	Description: Job WIP report including pulling data from 
+				 Project Contract Modules -- in addition to 
+				 Order Entry, Project Estimates and General Ledger.
+*/
+
+/* Task for 10.13.2022 - Complete
+	- Add the project contract line detail query into this
+		report. This way we can see the original amt, revised amount
+		and change order from both order entry and project line detail.
+	- Show in report 
+		- project id (PR)
+		- project name (PR)
+		- project contract amount (new)
+		- project contract change orders (new)
+		- project revised amount (new)
+		- original contract amount (OE)
+		- change orders contract amount (OE)
+		- revised contract amount (OE)
+		- original estimate (PE)
+		- approve C/o estimate (PE)
+		- revised estimate (PE)
+		- amount billed (GL)
+		- job cost to date (GL) */
+
+
+/* SQL Query Ready for Import*/
+
+	SELECT
+		ProjectKey,
+		ProjectID,
+		ProjectName,
+		ifnull(PCLDOriginal,0),
+		ifnull(PCLDChangeOrder,0),
+		ifnull(PCLDRevision,0),
+		ifnull(PCLDRevisedTotal,0),
+		ifnull(OriginalContractAmount,0),
+		ifnull(ChangeOrdersContractAmount,0),
+		ifnull(ContractCancellation,0),
+		ifnull(OriginalEstimate,0),
+		ifnull(ApprovedCOEstimate,0),
+		ifnull(RevisionEstimate,0),
+		ifnull(RevisedEstimate,0),
+		ifnull(AmountBilled,0),
+		ifnull(JobCost,0),
+		ifnull(Adjustments,0)
+		
+	FROM 				
+	(
+		SELECT 
+			"pa:Projects"."Project Attributes"."RECORDNO" AS ProjectKey,
+			"pa:Projects"."Project Attributes"."PROJECTID" AS ProjectID,
+			"pa:Projects"."Project Attributes"."NAME" AS ProjectName,
+			"pa:Projects"."Manager"."PERSONALINFO.CONTACTNAME" AS ManagerName,
+			"pa:Projects"."Project Attributes"."PROJECTSTATUS" AS JobStatus,
+      "pa:Projects"."Project Attributes"."STATUS" AS IntacctStatus,
+			"pa:Projects"."Project Attributes"."PROJECTTYPE" AS JobType,
+			"pa:Projects"."Project Attributes"."CUSTOMERNAME" AS CustomerName,
+			"pa:Projects"."Project Attributes"."CUSTOMERID" AS CustomerID,
+      "pa:Projects"."Project Attributes"."DEPARTMENTID" AS DivisionID,
+      "pa:Projects"."Project Attributes"."DEPARTMENTNAME" AS Division,
+      "pa:Projects"."Project Attributes"."DEPARTMENTID"||'  -  '||"pa:Projects"."Project Attributes"."DEPARTMENTNAME" AS DivisionDescriptionID,
+      "pa:Projects"."Project Attributes"."DEPARTMENTNAME"||'  -  '||"pa:Projects"."Project Attributes"."DEPARTMENTID" AS DivisionDescription,
+      "pa:Projects"."Class"."CLASSID" AS ClassID,
+      "pa:Projects"."Class"."NAME" AS Class,
+      "pa:Projects"."Class"."CLASSID"||'  -  '||"pa:Projects"."Class"."NAME" AS ClassDescriptionID,
+      "pa:Projects"."Class"."NAME"||'  -  '||"pa:Projects"."Class"."CLASSID" AS ClassDescription,
+      "pa:Projects"."Manager"."PERSONALINFO.CONTACTNAME" AS JobManager,
+      "pa:Projects"."Project Attributes"."MANAGERID" AS JobManagerID,
+      "pa:Projects"."Project Attributes"."MANAGERKEY" AS JobManagerKey,
+      "pa:Projects"."Department"."RECORDNO" AS MarketKey,
+      "pa:Projects"."Department"."TITLE" AS MarketName,
+      "pa:Projects"."Department"."DEPARTMENTID" AS MarketID,
+      "pa:Projects"."Project Attributes"."LOCATIONID" AS LocationID,
+      "pa:Projects"."Project Attributes"."LOCATIONNAME" AS LocationName,
+      "pa:Projects"."Location"."PARENTID" AS ParentID,
+      IFNULL("pa:Projects"."Location"."PARENTID","pa:Projects"."Project Attributes"."LOCATIONID") AS Entity 
+		FROM "pa:Projects"
+	)t1
+
+	LEFT JOIN
+
+	(
+		SELECT
+			"Project"."RECORDNO" ProjectKeyPE,
+			SUM(
+				FILTER("Project estimate entry Measures"."AMOUNT" 
+					USING (
+						"Project estimate"."ISPRIMARY" IN ('true','True') AND
+						"Project estimate entry Attributes"."WFTYPE" IN ('Original') AND
+						ifnull("Project estimate entry Attributes"."EFFECTIVEDATE", "Project estimate"."ESTIMATEDATE") <= @{as_of_date}{CURRENT_DATE}))
+			  BY "Project"."RECORDNO") OriginalEstimate,
+			SUM(
+				FILTER("Project estimate entry Measures"."AMOUNT" 
+					USING (
+						"Project estimate"."ISPRIMARY" IN ('true','True') AND
+						"Project estimate entry Attributes"."WFTYPE" IN ('Approved change') AND
+						ifnull("Project estimate entry Attributes"."EFFECTIVEDATE", "Project estimate"."ESTIMATEDATE") <= @{as_of_date}{CURRENT_DATE}))
+			  BY "Project"."RECORDNO") ApprovedCOEstimate,
+			SUM(
+				FILTER("Project estimate entry Measures"."AMOUNT" 
+					USING (
+						"Project estimate"."ISPRIMARY" IN ('true','True') AND
+						"Project estimate entry Attributes"."WFTYPE" IN ('Revision') AND
+						ifnull("Project estimate entry Attributes"."EFFECTIVEDATE", "Project estimate"."ESTIMATEDATE") <= @{as_of_date}{CURRENT_DATE}))
+			  BY "Project"."RECORDNO") RevisionEstimate,
+			SUM(
+				FILTER("Project estimate entry Measures"."AMOUNT" 
+					USING (
+						"Project estimate"."ISPRIMARY" IN ('true','True') AND 
+						"Project estimate entry Attributes"."WFTYPE" IN ('Original', 'Revision', 'Approved change') AND
+						ifnull("Project estimate entry Attributes"."EFFECTIVEDATE", "Project estimate"."ESTIMATEDATE") <= @{as_of_date}{CURRENT_DATE}))
+			  BY "Project"."RECORDNO") RevisedEstimate
+		FROM "cre:Project Estimates"
+	)pe ON t1.ProjectKey = pe.ProjectKeyPE
+					
+	LEFT JOIN
+					
+	(
+		SELECT
+			"Project"."RECORDNO" ProjectKeyOE,
+			SUM(
+				FILTER("so:Order Entry"."Order entry transaction detail Measures"."TOTAL" 
+					USING (
+						"so:Order Entry"."Transaction definition"."DOCCLASS" = 'Order' AND
+						"so:Order Entry"."Order entry transaction"."STATE" NOT IN ('Draft','Submitted') AND
+						"so:Order Entry"."Transaction definition"."REPORTINGCATEGORY" = 'Contracts' AND
+						ifnull("Order entry transaction"."WHENPOSTED", "Order entry transaction"."WHENCREATED") <= @{as_of_date}{CURRENT_DATE}
+  					)
+  				)
+  			BY "Project"."RECORDNO") OriginalContractAmount,
+			SUM(
+				FILTER("so:Order Entry"."Order entry transaction detail Measures"."TOTAL" 
+					USING (
+						"so:Order Entry"."Transaction definition"."DOCCLASS" = 'Order' AND
+						"so:Order Entry"."Order entry transaction"."STATE" NOT IN ('Draft','Submitted') AND
+						"so:Order Entry"."Transaction definition"."REPORTINGCATEGORY" = 'Contract change orders' AND
+						ifnull("Order entry transaction"."WHENPOSTED", "Order entry transaction"."WHENCREATED") <= @{as_of_date}{CURRENT_DATE}
+  						)
+  					)
+  			BY "Project"."RECORDNO") ChangeOrdersContractAmount,
+			SUM(
+				FILTER("so:Order Entry"."Order entry transaction detail Measures"."TOTAL"
+					USING (
+						"so:Order Entry"."Transaction definition"."DOCCLASS" = 'Order' AND
+						"so:Order Entry"."Order entry transaction"."STATE" NOT IN ('Draft','Submitted') AND
+						"so:Order Entry"."Transaction definition"."REPORTINGCATEGORY" = 'Event reservations' AND
+						ifnull("Order entry transaction"."WHENPOSTED", "Order entry transaction"."WHENCREATED") <= @{as_of_date}{CURRENT_DATE}
+  					)
+  				)
+  			BY "Project"."RECORDNO") ContractCancellation
+		FROM "so:Order Entry"
+	)oe ON oe.ProjectKeyOE = t1.ProjectKey
+
+	LEFT JOIN
+
+	(
+		SELECT
+			"cre:Project Contract Line Detail"."Project contract line.Project"."RECORDNO" AS PCLDProjectKey,
+			SUM(
+				FILTER ("cre:Project Contract Line Detail"."Project contract line detail Measures"."LINEPRICE"
+					USING (
+						"cre:Project Contract Line Detail"."Project contract line detail Attributes"."WFTYPE" IN ('Original') AND 
+						"cre:Project Contract Line Detail"."Project contract line"."BILLABLE" IN ('true','True') AND
+						IFNULL("Project contract line detail Attributes"."PRICEEFFECTIVEDATE", "Change request"."CHANGEREQUESTDATE") <= @{as_of_date}{CURRENT_DATE}
+    						)
+    					)
+    		BY "cre:Project Contract Line Detail"."Project contract line.Project"."RECORDNO") AS PCLDOriginal,
+			SUM(
+				FILTER ("cre:Project Contract Line Detail"."Project contract line detail Measures"."LINEPRICE" 
+					USING (
+						"cre:Project Contract Line Detail"."Project contract line detail Attributes"."WFTYPE" IN ('Approved change') AND
+						"cre:Project Contract Line Detail"."Project contract line"."BILLABLE" IN ('true','True') AND
+						IFNULL("Project contract line detail Attributes"."PRICEEFFECTIVEDATE", "Change request"."CHANGEREQUESTDATE") <= @{as_of_date}{CURRENT_DATE}
+    						)
+    					)
+    		BY "cre:Project Contract Line Detail"."Project contract line.Project"."RECORDNO") AS PCLDChangeOrder,
+			SUM(
+				FILTER ("cre:Project Contract Line Detail"."Project contract line detail Measures"."LINEPRICE"
+					USING (
+						"cre:Project Contract Line Detail"."Project contract line detail Attributes"."WFTYPE" IN ('Revision') AND
+						"cre:Project Contract Line Detail"."Project contract line"."BILLABLE" IN ('true','True') AND
+						IFNULL("Project contract line detail Attributes"."PRICEEFFECTIVEDATE", "Change request"."CHANGEREQUESTDATE") <= @{as_of_date}{CURRENT_DATE}
+    						)
+    					)
+    		BY "cre:Project Contract Line Detail"."Project contract line.Project"."RECORDNO") AS PCLDRevision,
+			SUM(
+				FILTER ("cre:Project Contract Line Detail"."Project contract line detail Measures"."LINEPRICE"
+					USING (
+						"cre:Project Contract Line Detail"."Project contract line detail Attributes"."WFTYPE" IN ('Original','Approved change','Revision') AND
+						"cre:Project Contract Line Detail"."Project contract line"."BILLABLE" IN ('true','True') AND
+						IFNULL("Project contract line detail Attributes"."PRICEEFFECTIVEDATE", "Change request"."CHANGEREQUESTDATE") <= @{as_of_date}{CURRENT_DATE}
+    						)
+    					)
+    		BY "cre:Project Contract Line Detail"."Project contract line.Project"."RECORDNO") AS PCLDRevisedTotal
+	FROM "cre:Project Contract Line Detail"
+	)pc ON pc.PCLDProjectKey = t1.ProjectKey
+					
+	LEFT JOIN
+					
+	(
+		SELECT
+			"Project"."RECORDNO" ProjectKeyGL,
+			SUM((
+				FILTER("gl:GL Detail"."General ledger detail Measures"."TRX_AMOUNT" 
+					USING (
+						"General ledger detail Attributes"."BOOKID" = 'ACCRUAL' AND
+						"GL account"."NORMALBALANCE" = 'Credit' AND 
+						"GL account"."ACCOUNTTYPE" IN ('Income Statement Account','Income statement account') AND 
+						"GL account"."CATEGORY" NOT IN ('Net Over or Under Billings') AND
+						"GL entry"."ENTRY_DATE" <= @{as_of_date}{CURRENT_DATE})
+  						)
+  					)
+  			BY "Project"."RECORDNO")*-1 AmountBilled,
+			SUM(
+				FILTER("gl:GL Detail"."General ledger detail Measures"."TRX_AMOUNT" 
+					USING (
+						(
+						"General ledger detail Attributes"."BOOKID" = 'ACCRUAL' AND
+						"GL account"."NORMALBALANCE" = 'Debit' AND
+						"GL entry"."ENTRY_DATE" <= @{as_of_date}{CURRENT_DATE}
+						) AND 
+							(
+							"GL account"."ACCOUNTTYPE" IN ('Income Statement Account','Income statement account') OR
+							("GL account"."ACCOUNTTYPE" IN ('Balance Sheet Account','Balance sheet account') AND
+							"GL account"."CATEGORY" IN ('Work in Process'))
+  							)
+  					)
+  				)
+  			BY "Project"."RECORDNO") JobCost,
+			SUM((
+				FILTER("gl:GL Detail"."General ledger detail Measures"."TRX_AMOUNT" 
+					USING (
+						"General ledger detail Attributes"."BOOKID" = 'ACCRUAL' AND
+						"GL account"."ACCOUNTTYPE" IN ('Income Statement Account','Income statement account') AND 
+						"GL account"."CATEGORY" IN ('Net Over or Under Billings') AND
+						"GL entry"."ENTRY_DATE" <= @{as_of_date}{CURRENT_DATE})
+  						)
+  					)
+  			BY "Project"."RECORDNO") Adjustments
+		FROM "gl:GL Detail"
+	)gl ON gl.ProjectKeyGL = t1.ProjectKey
